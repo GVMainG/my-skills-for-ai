@@ -10,7 +10,8 @@
       "Bash(/c/Users/GV/AppData/Local/Python/bin/python3 -c ' *)",
       "Bash(pip show *)",
       "Bash(python3 -c \"import site; print\\(site.USER_SCRIPTS\\)\")",
-      "Read(//c/Users/GV/AppData/Local/Python/pythoncore-3.14-64/Scripts/**)"
+      "Read(//c/Users/GV/AppData/Local/Python/pythoncore-3.14-64/Scripts/**)",
+      "WebSearch"
     ]
   }
 }

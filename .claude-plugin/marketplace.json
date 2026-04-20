@@ -1,0 +1,13 @@
+{
+  "name": "notes-manager",
+  "owner": {
+    "name": "GV"
+  },
+  "plugins": [
+    {
+      "name": "notes-manager",
+      "source": "..",
+      "description": "Управление Obsidian vault: анализ тегов, audit заметок, поиск, дневник, генерация профиля."
+    }
+  ]
+}
