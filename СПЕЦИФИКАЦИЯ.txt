@@ -1,0 +1,1878 @@
+Информации достаточно. Формирую полную спецификацию для Claude Code/Sonnet 4.6.
+
+---
+
+# СПЕЦИФИКАЦИЯ SKILL: NOTES-MANAGER
+
+## Executive Summary
+
+**Название:** notes-manager  
+**Версия:** 1.0.0 (MVP)  
+**Целевая платформа:** Claude Code, Claude Desktop  
+**Язык реализации:** Python 3.10+  
+**Тип:** User Skill для управления Obsidian vault
+
+**Назначение:** Автоматизация управления заметками в Obsidian — анализ тегов, audit качества заметок, интеллектуальный поиск, помощь в ведении дневника, генерация психологического профиля пользователя.
+
+---
+
+## Technical Requirements
+
+### Системные требования
+
+**Обязательные зависимости:**
+```
+Python >= 3.10
+Libraries:
+- pyyaml (конфигурация)
+- pathlib (file operations)
+- re (regex для парсинга)
+- dataclasses (структуры данных)
+- datetime (работа с датами)
+- typing (type hints)
+- json (сериализация)
+```
+
+**Опциональные зависимости (для deep analysis):**
+```
+- scikit-learn (text clustering, similarity)
+- nltk или spacy (NLP, keyword extraction)
+- transformers (semantic embeddings, опционально)
+```
+
+**Файловая система:**
+- Доступ на чтение/запись к Obsidian vault
+- Создание конфигурационного файла `~/.notes-manager/config.yaml`
+
+---
+
+## Архитектура Skill
+
+### Структура файлов
+
+```
+/mnt/skills/user/notes-manager/
+├── SKILL.md                          # Главное описание для Claude
+├── README.md                         # Документация для пользователя
+├── config.schema.yaml                # Схема конфигурации
+├── pyproject.toml                    # Python dependencies
+├── src/
+│   ├── __init__.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py                 # ConfigManager
+│   │   ├── vault.py                  # VaultManager (чтение vault)
+│   │   ├── note.py                   # Note dataclass
+│   │   └── tags.py                   # TagsManager (парсинг TAGS_HIERARCHICAL.md)
+│   ├── commands/
+│   │   ├── __init__.py
+│   │   ├── analyze_tags.py           # Команда 1
+│   │   ├── audit.py                  # Команда 2
+│   │   ├── search.py                 # Команда 3
+│   │   ├── daily_journal.py          # Команда 4
+│   │   └── generate_profile.py       # Команда 5
+│   ├── analyzers/
+│   │   ├── __init__.py
+│   │   ├── semantic_analyzer.py      # Semantic analysis для профиля
+│   │   ├── graph_builder.py          # Построение графа связей
+│   │   ├── keyword_extractor.py      # Извлечение ключевых слов
+│   │   └── sentiment_analyzer.py     # Sentiment analysis для дневников
+│   └── utils/
+│       ├── __init__.py
+│       ├── md_parser.py              # Парсинг Markdown + frontmatter
+│       ├── similarity.py             # Вычисление similarity (Jaccard, cosine)
+│       └── validators.py             # Валидация структуры заметок
+└── examples/
+    ├── usage_examples.md
+    └── test_vault/                   # Тестовые данные
+```
+
+---
+
+## Конфигурация
+
+### Файл: `~/.notes-manager/config.yaml`
+
+```yaml
+vault:
+  path: ""  # Путь к Obsidian vault (запрашивается при первом запуске)
+  tags_file: "99_Служебная/Indexes/TAGS_HIERARCHICAL.md"
+  
+folders:
+  inbox: "00-inbox"
+  daily: "10-daily"
+  areas: "20-areas"
+  projects: "30-projects"
+  archive: "40-archive"
+  service: "99_Служебная"
+  attachments: "_attachments"
+  templates: "_templates"
+
+limits:
+  max_notes_in_context: 25
+  context_usage_threshold: 0.55  # 55% максимум
+  search_max_results: 10
+
+search:
+  relevance_threshold: 0.2
+  enable_backlink_expansion: true
+  prioritization:
+    - "backlink_count"      # Приоритет 1
+    - "tag_match"           # Приоритет 2
+    - "modification_date"   # Приоритет 3
+
+audit:
+  min_note_length: 100  # символов
+  check_untitled: true
+  check_no_frontmatter: true
+  default_untitled_names:
+    - "Untitled"
+    - "Без названия"
+    - "New note"
+
+profile:
+  output_file: "CLAUDE.md"
+  
+  sources:
+    include_all: true  # Анализировать все заметки
+    exclude_tags:
+      - "входящие/*"
+      - "архив/*"
+    exclude_folders:
+      - "99_Служебная"
+  
+  analysis:
+    depth: "deep"  # shallow | deep
+    time_window_months: null  # null = все время
+    min_mentions_for_skill: 3
+    extract_quotes: true
+    show_contradictions: true
+  
+  auto_update:
+    enabled: true
+    schedule: "monthly"  # monthly | manual
+    trigger_new_notes: 50  # Триггер при N новых заметках
+  
+  sections:
+    - basic_info
+    - technical_skills
+    - interests
+    - psychological_portrait
+    - communication_style
+    - current_context
+    - knowledge_map
+    - metadata
+    - changelog
+```
+
+---
+
+## Команда 1: Analyze Tags
+
+### Синтаксис
+
+```bash
+notes-manager analyze-tags <filepath>
+  --auto-apply      # Автоматически применить рекомендации
+  --dry-run         # Показать изменения без применения
+```
+
+### Функциональность
+
+**Input:**
+- Путь к заметке (.md файл)
+
+**Process:**
+1. Парсинг файла: извлечь frontmatter, content, текущие теги
+2. Загрузка валидных тегов из `TAGS_HIERARCHICAL.md`
+3. Semantic analysis содержимого:
+   - Keyword extraction (ключевые слова/фразы)
+   - Mapping keywords → теги из иерархии
+   - Определение основного тега (главная тема заметки)
+4. Сравнение текущих тегов с рекомендованными:
+   - Теги на удаление (не соответствуют содержимому)
+   - Теги на добавление (отсутствуют, но релевантны)
+   - Новые теги (если контент не вписывается в существующую иерархию)
+5. Валидация по правилам (1-5 тегов, двухуровневая структура)
+
+**Output (текстовый формат):**
+```
+📝 Анализ тегов: /path/to/note.md
+
+Текущие теги (3):
+  #it/csharp
+  #личное/дневник
+  #образование/конспекты
+
+Рекомендации:
+
+❌ Удалить:
+  #личное/дневник
+  Причина: Содержимое не содержит личных рефлексий, фокус на технических концептах
+
+✅ Добавить:
+  #it/многопоточность
+  Причина: 15 упоминаний "async/await", "Task", "threading"
+  
+  #it/архитектура
+  Причина: Обсуждение паттернов проектирования
+
+⚠️ Новый тег (не в иерархии):
+  #it/performance
+  Обоснование: Контент фокусируется на оптимизации производительности
+  Рекомендация: Добавить в TAGS_HIERARCHICAL.md под #it/performance
+
+Итого тегов после применения: 4 (в пределах нормы 1-5)
+
+Применить изменения? [Y/n]
+```
+
+**Если `--auto-apply`:**
+- Автоматически обновить frontmatter
+- Сохранить файл
+- Вывести "✅ Теги обновлены"
+
+**Алгоритм mapping keywords → tags:**
+```python
+def map_keywords_to_tags(keywords, tags_hierarchy):
+    """
+    keywords: ['async', 'await', 'threading', 'C#', 'performance']
+    tags_hierarchy: parsed TAGS_HIERARCHICAL.md
+    
+    Returns: [(tag, confidence_score), ...]
+    """
+    candidates = []
+    
+    for tag in tags_hierarchy:
+        tag_keywords = extract_tag_keywords(tag)  # Из описания тега
+        score = calculate_overlap(keywords, tag_keywords)
+        if score > 0.3:  # Порог релевантности
+            candidates.append((tag, score))
+    
+    # Сортировка по score, топ-5
+    return sorted(candidates, key=lambda x: x[1], reverse=True)[:5]
+```
+
+---
+
+## Команда 2: Audit
+
+### Синтаксис
+
+```bash
+notes-manager audit <folder_path>
+  --check-format           # Проверить frontmatter, длину
+  --check-placement        # Проверить соответствие папки/тегов
+  --find-duplicates        # Найти дубли
+  --check-links            # Найти битые ссылки
+  --check-tags             # Теги не из TAGS_HIERARCHICAL.md
+  --auto-fix               # Автоисправление тривиальных проблем
+  --all                    # Все проверки (default)
+```
+
+### Функциональность
+
+**Input:**
+- Путь к папке для анализа (может быть весь vault)
+
+**Process:**
+
+#### 2.1. Check Format
+```python
+def check_format(note):
+    issues = []
+    
+    # Проверка frontmatter
+    if not note.has_frontmatter():
+        issues.append({
+            'type': 'missing_frontmatter',
+            'severity': 'high',
+            'auto_fix': True,
+            'fix': 'add_default_frontmatter'
+        })
+    
+    # Проверка длины
+    if len(note.content) < config.audit.min_note_length:
+        issues.append({
+            'type': 'too_short',
+            'severity': 'medium',
+            'auto_fix': False,
+            'suggestion': 'Expand content or move to inbox'
+        })
+    
+    # Проверка названия
+    if note.filename in config.audit.default_untitled_names:
+        issues.append({
+            'type': 'untitled',
+            'severity': 'medium',
+            'auto_fix': True,
+            'fix': 'generate_title_from_content'
+        })
+    
+    return issues
+```
+
+#### 2.2. Check Placement
+```python
+def check_placement(note, vault):
+    """
+    Проверяет конфликт между:
+    - Содержимым заметки
+    - Текущей папкой
+    - Тегами
+    """
+    issues = []
+    
+    # Извлечь основную тему из содержимого
+    inferred_category = infer_category_from_content(note.content)
+    
+    # Извлечь категорию из папки
+    folder_category = extract_category_from_path(note.path)
+    
+    # Извлечь категорию из тегов
+    tag_categories = [extract_category_from_tag(tag) for tag in note.tags]
+    
+    # Сравнение
+    if inferred_category != folder_category:
+        issues.append({
+            'type': 'folder_mismatch',
+            'severity': 'high',
+            'current_folder': note.folder,
+            'suggested_folder': map_category_to_folder(inferred_category),
+            'reason': f'Content suggests {inferred_category}, but in {folder_category}'
+        })
+    
+    if inferred_category not in tag_categories:
+        issues.append({
+            'type': 'missing_category_tag',
+            'severity': 'medium',
+            'suggested_tag': map_category_to_tag(inferred_category)
+        })
+    
+    return issues
+```
+
+#### 2.3. Find Duplicates
+```python
+def find_duplicates(notes):
+    """
+    Использует Jaccard similarity на уровне предложений
+    """
+    duplicates = []
+    
+    for i, note1 in enumerate(notes):
+        for note2 in notes[i+1:]:
+            similarity = calculate_jaccard_similarity(note1.content, note2.content)
+            
+            if similarity > 0.8:  # 80% совпадение
+                duplicates.append({
+                    'note1': note1.path,
+                    'note2': note2.path,
+                    'similarity': similarity,
+                    'suggestion': 'Merge notes and delete duplicates'
+                })
+    
+    return duplicates
+```
+
+#### 2.4. Check Links
+```python
+def check_links(note, vault):
+    """
+    Находит битые ссылки вида [[Note Name]]
+    """
+    broken_links = []
+    
+    # Regex для извлечения Obsidian links
+    links = re.findall(r'\[\[([^\]]+)\]\]', note.content)
+    
+    for link in links:
+        # Проверить существование файла
+        target_path = vault.resolve_link(link)
+        if not target_path.exists():
+            broken_links.append({
+                'link': link,
+                'line': find_line_number(note.content, link),
+                'suggestion': 'Remove link or create note'
+            })
+    
+    return broken_links
+```
+
+#### 2.5. Check Tags
+```python
+def check_tags(note, tags_hierarchy):
+    """
+    Проверяет, что все теги из заметки есть в TAGS_HIERARCHICAL.md
+    """
+    invalid_tags = []
+    
+    for tag in note.tags:
+        if tag not in tags_hierarchy.all_tags:
+            invalid_tags.append({
+                'tag': tag,
+                'suggestion': find_closest_tag(tag, tags_hierarchy),
+                'action': 'Add to TAGS_HIERARCHICAL.md or replace with valid tag'
+            })
+    
+    return invalid_tags
+```
+
+**Output (текстовый формат):**
+```
+🔍 Audit: 20-areas/development/ (147 files analyzed)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 FORMAT ISSUES (12)
+
+❌ HIGH: Missing frontmatter
+  - async-await-notes.md
+  - docker-compose-setup.md
+  ✅ Auto-fix: Add default frontmatter
+
+⚠️ MEDIUM: Too short (< 100 chars)
+  - quick-note.md (47 chars)
+  - temp.md (12 chars)
+  💡 Suggestion: Move to 00-inbox/ or expand
+
+⚠️ MEDIUM: Untitled notes
+  - Untitled.md
+  - Без названия 2.md
+  ✅ Auto-fix: Generate title from content
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📂 PLACEMENT ISSUES (5)
+
+❌ HIGH: Folder mismatch
+  - File: 20-areas/development/my-poetry.md
+    Current: development/
+    Suggested: personal/ (творчество/поэзия)
+    Reason: Content contains poetry, tags include #творчество/поэзия
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔗 DUPLICATE NOTES (3)
+
+⚠️ MEDIUM: High similarity detected
+  - docker-intro.md ↔ docker-basics.md (87% similar)
+  💡 Suggestion: Merge into single note, delete duplicate
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔗 BROKEN LINKS (7)
+
+❌ HIGH: Link target not found
+  - File: csharp-advanced.md
+    Line 45: [[SOLID Principles]]
+    💡 Suggestion: Create note or remove link
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🏷️ INVALID TAGS (2)
+
+⚠️ MEDIUM: Tag not in hierarchy
+  - File: performance-tuning.md
+    Tag: #it/optimization
+    💡 Similar: #it/архитектура
+    Action: Add to TAGS_HIERARCHICAL.md or replace
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SUMMARY:
+  Total issues: 29
+  Auto-fixable: 14
+  Manual review: 15
+
+Apply auto-fixes? [Y/n]
+```
+
+---
+
+## Команда 3: Search
+
+### Синтаксис
+
+```bash
+notes-manager search "<query>"
+  --max-results 10
+  --include-backlinks
+  --scope <folder>        # Ограничить поиск папкой
+  --tags <tag1,tag2>      # Фильтр по тегам
+```
+
+### Функциональность
+
+**Трёхуровневый поиск:**
+
+#### Level 1: Tag-based Filtering
+```python
+def search_level1_tags(query, vault, tags_hierarchy):
+    """
+    Извлечь потенциальные теги из запроса
+    """
+    # Keyword extraction
+    keywords = extract_keywords(query)  # ['docker', 'homelab', 'настройка']
+    
+    # Mapping на теги
+    potential_tags = map_keywords_to_tags(keywords, tags_hierarchy)
+    # -> [#it/docker, #инфраструктура/homelab, #инфраструктура/развертывание]
+    
+    # Получить все заметки с этими тегами
+    candidates = []
+    for tag in potential_tags:
+        notes = vault.get_notes_by_tag(tag)
+        candidates.extend(notes)
+    
+    # Deduplicate
+    return list(set(candidates))
+```
+
+#### Level 2: Keyword Search
+```python
+def search_level2_keywords(query, candidates):
+    """
+    Полнотекстовый поиск в отфильтрованных заметках
+    """
+    keywords = extract_keywords(query)
+    scored = []
+    
+    for note in candidates:
+        score = 0
+        content_lower = note.content.lower()
+        
+        for keyword in keywords:
+            # Подсчёт упоминаний
+            count = content_lower.count(keyword.lower())
+            score += count
+        
+        # Нормализация по длине заметки
+        normalized_score = score / (len(note.content) / 1000)
+        
+        if normalized_score > config.search.relevance_threshold:
+            scored.append((note, normalized_score))
+    
+    # Сортировка по score
+    return sorted(scored, key=lambda x: x[1], reverse=True)
+```
+
+#### Level 3: Backlink Expansion
+```python
+def search_level3_backlinks(top_results, vault, max_expand=5):
+    """
+    Найти заметки, ссылающиеся на топ результаты
+    """
+    related = []
+    
+    for note, score in top_results[:max_expand]:
+        backlinks = vault.find_backlinks(note)
+        
+        for backlink in backlinks:
+            related.append((backlink, score * 0.5))  # Пониженный score
+    
+    return related
+```
+
+**Приоритизация результатов:**
+```python
+def prioritize_results(results, vault):
+    """
+    Сортировка по критериям из config
+    """
+    def calculate_priority(note, base_score):
+        priority_score = base_score
+        
+        # 1. Количество backlinks (приоритет 1)
+        backlink_count = len(vault.find_backlinks(note))
+        priority_score += backlink_count * 0.5
+        
+        # 2. Tag match (приоритет 2)
+        # Уже учтено в base_score
+        
+        # 3. Modification date (приоритет 3)
+        days_since_modified = (datetime.now() - note.modified).days
+        recency_score = max(0, 1 - (days_since_modified / 365))
+        priority_score += recency_score * 0.3
+        
+        return priority_score
+    
+    prioritized = [
+        (note, calculate_priority(note, score))
+        for note, score in results
+    ]
+    
+    return sorted(prioritized, key=lambda x: x[1], reverse=True)
+```
+
+**Output:**
+```
+🔍 Search: "настройка docker в homelab"
+
+Found 8 results (searched 147 notes):
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Docker Compose для homelab (relevance: 0.92) ⭐⭐⭐
+   Path: 20-areas/infrastructure/docker-homelab.md
+   Tags: #инфраструктура/homelab, #it/docker, #инфраструктура/развертывание
+   Modified: 2026-04-15
+   Preview: Настройка Docker Compose для развертывания сервисов на домашнем сервере...
+   Backlinks: 3 notes
+
+2. Linux server setup (relevance: 0.78) ⭐⭐
+   Path: 20-areas/infrastructure/linux-server.md
+   Tags: #инфраструктура/linux, #инфраструктура/homelab
+   Modified: 2026-03-20
+   Preview: Базовая настройка Ubuntu Server для использования в homelab...
+   Backlinks: 1 note
+
+3. FRP туннелирование (relevance: 0.65) ⭐
+   Path: 20-areas/infrastructure/frp-tunneling.md
+   Tags: #инфраструктура/проксирование
+   Modified: 2026-02-10
+   Preview: Проброс портов для Docker контейнеров через FRP...
+   Backlinks: 2 notes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Related notes (via backlinks):
+  - n8n автоматизация (references #1)
+  - CI/CD pipeline (references #1)
+
+Open result? [1-8 or 'q' to quit]
+```
+
+---
+
+## Команда 4: Daily Journal
+
+### Синтаксис
+
+```bash
+notes-manager daily-journal
+  --questions 5              # Количество вопросов (default: 5)
+  --find-connections         # Искать связи с прошлыми записями
+  --no-create                # Не создавать файл, только показать вопросы
+```
+
+### Функциональность
+
+**Workflow:**
+
+#### Шаг 1: Генерация вопросов
+```python
+def generate_questions(vault, profile=None, n=5):
+    """
+    Генерирует адаптивные вопросы на основе:
+    - Контекста (недавние заметки)
+    - Профиля пользователя (если существует)
+    - Прошлых дневниковых записей
+    """
+    questions = []
+    
+    # Базовые вопросы (fallback)
+    base_questions = [
+        "Что сегодня было самым важным?",
+        "Чему новому научился?",
+        "Какие эмоции испытывал?",
+        "Что хотел бы изменить в сегодняшнем дне?",
+        "О чём думал больше всего?"
+    ]
+    
+    # Если есть профиль — адаптивные вопросы
+    if profile:
+        # Из недавних заметок
+        recent_notes = vault.get_recent_notes(days=7, tags=['#it/*', '#карьера/*'])
+        if recent_notes:
+            topics = extract_main_topics(recent_notes)
+            questions.append(f"Какой прогресс по {topics[0]}?")
+        
+        # Из психологического портрета
+        if 'recurring_themes' in profile:
+            theme = random.choice(profile['recurring_themes'])
+            questions.append(f"Как сегодня обстояли дела с {theme}?")
+    
+    # Заполнить до N вопросов
+    while len(questions) < n:
+        questions.append(random.choice(base_questions))
+        base_questions.remove(questions[-1])
+    
+    return questions[:n]
+```
+
+#### Шаг 2: Сбор ответов
+```
+User interaction:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📝 Дневниковая запись на 20.04.2026
+
+Вопрос 1/5: Что сегодня было самым важным?
+> [ждём ввода пользователя]
+
+Вопрос 2/5: Какой прогресс по многопоточности в C#?
+> [ждём ввода]
+
+...
+```
+
+#### Шаг 3: Поиск связей с прошлыми записями
+```python
+def find_connections(answers, vault):
+    """
+    Ищет связи с прошлыми дневниковыми записями
+    """
+    # Извлечь keywords из ответов
+    keywords = extract_keywords(' '.join(answers))
+    
+    # Получить все дневниковые записи
+    daily_notes = vault.get_notes_by_folder('10-daily/')
+    
+    connections = []
+    
+    for note in daily_notes:
+        # Пропустить сегодняшнюю дату
+        if note.date == datetime.today():
+            continue
+        
+        # Вычислить keyword overlap
+        note_keywords = extract_keywords(note.content)
+        overlap = set(keywords) & set(note_keywords)
+        
+        if len(overlap) >= 2:  # Минимум 2 общих ключевых слова
+            # Проверить временные паттерны
+            days_ago = (datetime.today() - note.date).days
+            
+            # Приоритет: неделя назад, месяц назад, год назад
+            if days_ago in [7, 30, 365] or 5 <= days_ago <= 9:
+                connections.append({
+                    'note': note,
+                    'days_ago': days_ago,
+                    'common_keywords': overlap,
+                    'excerpt': extract_relevant_excerpt(note, overlap)
+                })
+    
+    return sorted(connections, key=lambda x: x['days_ago'])[:3]  # Топ-3
+```
+
+#### Шаг 4: Создание файла
+```python
+def create_daily_note(answers, connections, vault):
+    """
+    Создаёт дневниковую заметку в формате:
+    DD-MM-YYYY - [заголовок].md
+    """
+    # Генерация заголовка из ответов
+    title = generate_title_from_answers(answers)  # "Прогресс в async await"
+    
+    date_str = datetime.today().strftime('%d-%m-%Y')
+    filename = f"{date_str} - {title}.md"
+    filepath = vault.folders['daily'] / filename
+    
+    # Формирование контента
+    content = f"""---
+created: {datetime.today().isoformat()}
+tags: [личное/дневник]
+---
+
+# {title}
+
+{format_answers_as_text(answers)}
+
+## Связи с прошлым
+
+{format_connections(connections)}
+
+## Метки
+#личное/дневник
+"""
+    
+    # Сохранение
+    filepath.write_text(content, encoding='utf-8')
+    
+    return filepath
+```
+
+**Output:**
+```
+📝 Дневниковая запись на 20.04.2026
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Вопрос 1/5: Что сегодня было самым важным?
+> Разобрался с async/await, наконец-то понял как работает Task.Run()
+
+Вопрос 2/5: Какой прогресс по многопоточности в C#?
+> Написал пример с CancellationToken, всё работает
+
+Вопрос 3/5: Чему новому научился?
+> Что ConfigureAwait(false) нужен для library кода
+
+Вопрос 4/5: Какие эмоции испытывал?
+> Удовлетворение от понимания сложной темы
+
+Вопрос 5/5: О чём думал больше всего?
+> Как применить это в текущем проекте
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔗 Нашёл связи с прошлыми записями:
+
+📅 8 дней назад (12.04.2026):
+   "Изучал асинхронность, но Task.Run() всё ещё путаница"
+   
+   → Вижу прогресс! Тогда была путаница, теперь понимание 🎉
+
+📅 31 день назад (20.03.2026):
+   "Начал углубляться в многопоточность в C#"
+   
+   → Месяц работы дал результаты — от базового знакомства к практическому применению
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ Создана заметка: 10-daily/20-04-2026 - Прогресс в async await.md
+```
+
+---
+
+## Команда 5: Generate Profile
+
+### Синтаксис
+
+```bash
+notes-manager generate-profile
+  --update              # Обновить существующий профиль
+  --output <path>       # Кастомный путь (default: CLAUDE.md)
+  --sections <list>     # Конкретные секции для генерации
+```
+
+### Функциональность
+
+**Deep Semantic Analysis:**
+
+#### Компоненты анализа
+
+**1. Technical Skills Extraction:**
+```python
+def extract_technical_skills(vault):
+    """
+    Извлечение технических навыков из заметок
+    """
+    tech_notes = vault.get_notes_by_tags(['#it/*', '#инфраструктура/*'])
+    
+    skills = {}
+    
+    for note in tech_notes:
+        # Извлечь упоминания технологий
+        technologies = extract_tech_mentions(note.content)
+        # Regex: C#, .NET, Docker, Kubernetes, async/await, LINQ и т.д.
+        
+        for tech in technologies:
+            if tech not in skills:
+                skills[tech] = {
+                    'mentions': 0,
+                    'notes': [],
+                    'contexts': []
+                }
+            
+            skills[tech]['mentions'] += 1
+            skills[tech]['notes'].append(note.filename)
+            
+            # Извлечь контекст упоминания
+            context = extract_context_around_mention(note.content, tech)
+            skills[tech]['contexts'].append(context)
+    
+    # Определить уровень навыка
+    for tech, data in skills.items():
+        mentions = data['mentions']
+        
+        # Уровень на основе количества упоминаний и глубины контекста
+        if mentions >= 10 and has_deep_context(data['contexts']):
+            level = "expert"
+        elif mentions >= 5:
+            level = "intermediate"
+        elif mentions >= 2:
+            level = "familiar"
+        else:
+            level = "beginner"
+        
+        skills[tech]['level'] = level
+    
+    return skills
+```
+
+**2. Psychological Portrait:**
+```python
+def build_psychological_portrait(vault):
+    """
+    Анализ личных заметок для психологического портрета
+    """
+    personal_notes = vault.get_notes_by_tags([
+        '#личное/дневник',
+        '#личное/рефлексия'
+    ])
+    
+    portrait = {
+        'cognitive_style': analyze_cognitive_style(personal_notes),
+        'personality_traits': extract_personality_traits(personal_notes),
+        'values': extract_values(personal_notes),
+        'behavioral_patterns': find_behavioral_patterns(personal_notes),
+        'contradictions': find_contradictions(personal_notes)
+    }
+    
+    return portrait
+
+def analyze_cognitive_style(notes):
+    """
+    Системное vs интуитивное мышление
+    Аналитическое vs холистическое
+    """
+    indicators = {
+        'systematic': ['план', 'структура', 'алгоритм', 'этап', 'последовательно'],
+        'intuitive': ['чувствую', 'кажется', 'интуиция', 'догадка'],
+        'analytical': ['анализ', 'разобрать', 'компоненты', 'детали'],
+        'holistic': ['общая картина', 'в целом', 'взаимосвязь']
+    }
+    
+    scores = {key: 0 for key in indicators}
+    
+    for note in notes:
+        content_lower = note.content.lower()
+        for style, keywords in indicators.items():
+            for keyword in keywords:
+                scores[style] += content_lower.count(keyword)
+    
+    # Определить доминирующий стиль
+    total = sum(scores.values())
+    percentages = {k: (v/total)*100 for k, v in scores.items()} if total > 0 else {}
+    
+    return {
+        'dominant': max(scores, key=scores.get),
+        'distribution': percentages
+    }
+
+def extract_personality_traits(notes):
+    """
+    Извлечение черт личности через:
+    - Sentiment analysis
+    - Keyword patterns
+    - Self-descriptions
+    """
+    traits = {
+        'introversion': 0,
+        'extraversion': 0,
+        'conscientiousness': 0,
+        'openness': 0,
+        'neuroticism': 0
+    }
+    
+    # Big Five индикаторы
+    patterns = {
+        'introversion': ['один', 'тишина', 'сосредоточиться', 'уединение'],
+        'extraversion': ['общение', 'люди', 'вместе', 'компания'],
+        'conscientiousness': ['организованно', 'план', 'дисциплина', 'порядок'],
+        'openness': ['новое', 'идея', 'творчество', 'эксперимент'],
+        'neuroticism': ['тревога', 'беспокойство', 'стресс', 'волнение']
+    }
+    
+    for note in notes:
+        for trait, keywords in patterns.items():
+            for keyword in keywords:
+                traits[trait] += note.content.lower().count(keyword)
+    
+    # Нормализация и ранжирование
+    sorted_traits = sorted(traits.items(), key=lambda x: x[1], reverse=True)
+    
+    return {
+        'top_traits': [t[0] for t in sorted_traits[:3]],
+        'scores': traits
+    }
+
+def find_contradictions(notes):
+    """
+    Находит противоречивые утверждения в разных заметках
+    """
+    contradictions = []
+    
+    # Извлечь утверждения (предложения с сильными модальностями)
+    statements = []
+    for note in notes:
+        sents = extract_strong_statements(note)
+        for sent in sents:
+            statements.append({
+                'text': sent,
+                'note': note,
+                'date': note.modified
+            })
+    
+    # Поиск противоречий
+    for i, stmt1 in enumerate(statements):
+        for stmt2 in statements[i+1:]:
+            if are_contradictory(stmt1['text'], stmt2['text']):
+                contradictions.append({
+                    'statement1': stmt1,
+                    'statement2': stmt2,
+                    'topic': extract_topic(stmt1['text']),
+                    'time_gap_days': (stmt2['date'] - stmt1['date']).days
+                })
+    
+    return contradictions
+
+def are_contradictory(text1, text2):
+    """
+    Простая эвристика для определения противоречий:
+    - Одинаковая тема
+    - Противоположные модальности (люблю/не люблю, хорошо/плохо)
+    """
+    # Извлечь темы
+    topic1 = extract_main_noun(text1)
+    topic2 = extract_main_noun(text2)
+    
+    if topic1 != topic2:
+        return False
+    
+    # Проверить полярность sentiment
+    sentiment1 = analyze_sentiment(text1)  # -1 to 1
+    sentiment2 = analyze_sentiment(text2)
+    
+    # Противоположные мнения
+    if (sentiment1 > 0.5 and sentiment2 < -0.5) or \
+       (sentiment1 < -0.5 and sentiment2 > 0.5):
+        return True
+    
+    return False
+```
+
+**3. Interests & Knowledge Map:**
+```python
+def build_knowledge_map(vault):
+    """
+    Граф знаний: темы, уровень глубины, связи
+    """
+    all_notes = vault.get_all_notes(exclude_folders=['99_Служебная'])
+    
+    # Построить граф
+    graph = nx.DiGraph()
+    
+    for note in all_notes:
+        # Добавить узел
+        graph.add_node(note.filename, **{
+            'tags': note.tags,
+            'modified': note.modified,
+            'word_count': len(note.content.split())
+        })
+        
+        # Добавить рёбра (ссылки)
+        links = extract_links(note.content)
+        for link in links:
+            target = vault.resolve_link(link)
+            if target:
+                graph.add_edge(note.filename, target.filename)
+    
+    # Анализ графа
+    knowledge_map = {
+        'total_notes': len(graph.nodes),
+        'total_connections': len(graph.edges),
+        'hub_notes': find_hub_notes(graph),  # Узлы с наибольшим количеством связей
+        'topic_clusters': detect_topic_clusters(graph, vault),
+        'knowledge_depth': calculate_knowledge_depth(graph)
+    }
+    
+    return knowledge_map
+
+def detect_topic_clusters(graph, vault):
+    """
+    Кластеризация заметок по темам
+    """
+    from sklearn.cluster import AgglomerativeClustering
+    
+    # Создать матрицу признаков (теги + keywords)
+    notes = list(graph.nodes)
+    feature_matrix = []
+    
+    for note_name in notes:
+        note = vault.get_note(note_name)
+        features = set(note.tags) | set(extract_keywords(note.content))
+        feature_matrix.append(features)
+    
+    # Вычислить матрицу сходства (Jaccard)
+    similarity_matrix = compute_jaccard_matrix(feature_matrix)
+    
+    # Кластеризация
+    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=0.7)
+    labels = clustering.fit_predict(1 - similarity_matrix)  # Distance = 1 - similarity
+    
+    # Группировка по кластерам
+    clusters = {}
+    for note_name, label in zip(notes, labels):
+        if label not in clusters:
+            clusters[label] = []
+        clusters[label].append(note_name)
+    
+    # Именование кластеров
+    named_clusters = {}
+    for label, note_names in clusters.items():
+        # Извлечь общую тему
+        all_tags = []
+        for note_name in note_names:
+            note = vault.get_note(note_name)
+            all_tags.extend(note.tags)
+        
+        most_common_tag = Counter(all_tags).most_common(1)[0][0]
+        cluster_name = most_common_tag.replace('#', '').replace('/', ' / ')
+        
+        named_clusters[cluster_name] = note_names
+    
+    return named_clusters
+```
+
+**Структура CLAUDE.md:**
+```markdown
+---
+generated: 2026-04-20T15:30:00
+last_updated: 2026-04-20T15:30:00
+version: 1.0
+sources_analyzed: 147
+analysis_depth: deep
+---
+
+# Профиль пользователя
+
+> Этот файл автоматически генерируется на основе анализа всех заметок в vault.
+> Последнее обновление: 20 апреля 2026
+
+---
+
+## 1. Базовая информация
+
+- **Локация:** Москва, Россия
+- **Профессия:** C# разработчик
+- **Опыт работы:** [Извлечено из #карьера заметок]
+- **Основная экспертиза:** Backend development (.NET), архитектура ПО, self-hosted инфраструктура
+
+---
+
+## 2. Технические навыки
+
+### 2.1. Экспертный уровень (10+ упоминаний, глубокий контекст)
+
+**C# / .NET**
+- Упоминаний: 47
+- Темы: async/await, многопоточность, LINQ, dependency injection
+- Последнее изучение: ConfigureAwait, CancellationToken (апрель 2026)
+- Цитата: _"Наконец-то понял как работает Task.Run() и когда его использовать"_ (20.04.2026)
+
+**Docker / Контейнеризация**
+- Упоминаний: 23
+- Темы: Docker Compose, развертывание, оркестрация
+- Проекты: Homelab setup с multiple containers
+- Цитата: _"Docker Compose для homelab — идеальное решение для изоляции сервисов"_ (15.04.2026)
+
+### 2.2. Промежуточный уровень (5-9 упоминаний)
+
+**Linux / Ubuntu Server**
+- Упоминаний: 8
+- Контекст: Системное администрирование для homelab
+
+**Архитектура ПО**
+- Упоминаний: 6
+- Темы: Clean Architecture, SOLID, микросервисы vs монолит
+
+### 2.3. Знакомство (2-4 упоминания)
+
+**AI / Промпт-инжиниринг**
+- Упоминаний: 4
+- Инструменты: Claude, GPT-4, Qwen
+
+**n8n / Автоматизация**
+- Упоминаний: 3
+- Контекст: Workflows для homelab
+
+### 2.4. Текущее обучение
+
+На основе заметок за последний месяц:
+1. **Многопоточность в C#** — активное изучение (12 заметок в апреле)
+2. **Подготовка к собеседованиям** — системный подход (5 заметок)
+3. **Self-hosted инфраструктура** — практическая реализация
+
+---
+
+## 3. Интересы и увлечения
+
+### 3.1. Профессиональные
+
+**Топ-5 тем по количеству заметок:**
+1. Разработка на C# / .NET (47 заметок)
+2. Архитектура ПО (15 заметок)
+3. Homelab и self-hosted решения (12 заметок)
+4. AI и промпт-инжиниринг (8 заметок)
+5. Подготовка к карьерному росту (7 заметок)
+
+### 3.2. Личные
+
+**Поэзия и творчество**
+- 6 заметок с тегом #творчество/поэзия
+- Интерес к хайку (3 заметки)
+- Цитата: _"Хайку — это медитация в стихотворной форме"_ (10.03.2026)
+
+**Создание видеоконтента**
+- 4 заметки с тегом #творчество/видео
+- Фокус: Технический контент для YouTube
+
+### 3.3. Недавно появившиеся интересы (последние 30 дней)
+
+- Obsidian и PKM системы
+- Автоматизация рутинных задач через n8n
+- Персонализация AI агентов
+
+---
+
+## 4. Психологический портрет
+
+### 4.1. Когнитивный стиль
+
+**Доминирующий стиль:** Системно-аналитическое мышление
+- Системное: 42%
+- Аналитическое: 35%
+- Интуитивное: 15%
+- Холистическое: 8%
+
+**Характеристики:**
+- Предпочитает структурированный подход к проблемам
+- Разбивает сложные задачи на этапы
+- Ценит детальный анализ перед принятием решений
+- Строит ментальные модели и схемы
+
+**Цитаты-подтверждения:**
+> _"Нужно разобрать эту проблему по компонентам, понять каждый отдельно"_ (18.04.2026)
+>
+> _"Создал diagram для визуализации архитектуры — так намного понятнее"_ (12.04.2026)
+
+### 4.2. Черты характеры (Big Five)
+
+**Топ-3 черты:**
+1. **Conscientiousness (Добросовестность)** — высокий уровень
+   - Организованность, планирование, дисциплина
+   - Упоминаний индикаторов: 28
+
+2. **Openness (Открытость опыту)** — высокий уровень
+   - Интерес к новым технологиям, экспериментирование
+   - Упоминаний: 21
+
+3. **Introversion (Интроверсия)** — умеренный уровень
+   - Предпочтение глубокой работы в одиночестве
+   - Упоминаний: 15
+
+**Сильные стороны:**
+- Методичность в обучении
+- Способность к глубокой концентрации
+- Стремление к самосовершенствованию
+- Критическое мышление
+
+**Области развития:**
+- Баланс между изучением и применением (тенденция к "tutorial hell")
+- Делегирование и работа в команде (меньше упоминаний)
+
+### 4.3. Ценности и приоритеты
+
+**Топ-5 ценностей (извлечено из #личное/рефлексия):**
+
+1. **Профессиональный рост**
+   - Постоянное обучение, экспертиза
+   - Цитата: _"Хочу стать экспертом, а не просто писать код"_ (05.04.2026)
+
+2. **Автономность**
+   - Self-hosted решения, контроль над инфраструктурой
+   - Цитата: _"Важно понимать что происходит под капотом"_ (28.03.2026)
+
+3. **Системность и порядок**
+   - Структурированные знания, организация
+   - Проявление: ведение Obsidian, создание систем тегов
+
+4. **Творческая реализация**
+   - Поэзия, создание контента
+   - Баланс технического и креативного
+
+5. **Долгосрочное мышление**
+   - Инвестиции в знания "на всю жизнь"
+   - Цитата: _"Obsidian — это архив знаний, который буду вести десятилетиями"_ (19.04.2026)
+
+### 4.4. Паттерны поведения
+
+**Повторяющиеся темы из дневников:**
+
+**Как реагирует на стресс:**
+- Систематизация и планирование как способ справиться
+- Погружение в обучение/работу (escape into competence)
+- Цитата: _"Когда тревожно — начинаю структурировать мысли на бумаге"_ (02.04.2026)
+
+**Что мотивирует:**
+- Прогресс в понимании сложных тем
+- Создание систем, которые работают
+- Признание экспертизы
+- Цитата: _"Кайф когда наконец-то 'щёлкнуло' и всё встало на места"_ (20.04.2026)
+
+**Триггеры и challenges:**
+- Хаос и отсутствие структуры (негативный триггер)
+- Незавершённые дела и inbox overload (источник тревоги)
+- Сравнение с другими разработчиками (impostor syndrome)
+
+### 4.5. Противоречия и эволюция взглядов
+
+⚠️ **Обнаружены противоречия в заметках — часть психологического профиля:**
+
+**Тема: Микросервисы vs Монолит**
+- **2024-01:** _"Не люблю микросервисы, монолит проще и понятнее"_
+- **2026-04:** _"Микросервисы — отличный подход для нашего проекта, изоляция сервисов критична"_
+- **Разрыв:** 15 месяцев
+- **Вывод:** Изменение мнения на основе практического опыта
+
+**Тема: Публичная активность**
+- **2025-11:** _"Не хочу создавать контент, для себя достаточно"_
+- **2026-03:** _"Начал планировать YouTube канал, хочу делиться знаниями"_
+- **Разрыв:** 4 месяца
+- **Вывод:** Быстрая смена приоритетов, возможно триггер — достижение определённого уровня экспертизы
+
+**Тема: Work-life balance**
+- **Постоянное противоречие:** В дневниках регулярно упоминается важность баланса, но фактические действия (количество технических заметок vs личных) показывают перекос в сторону работы/обучения
+- **Вывод:** Осознаваемая vs реальная ценность — область активной рефлексии
+
+---
+
+## 5. Стиль общения
+
+### 5.1. Предпочтения в коммуникации
+
+**На основе userPreferences + анализ стиля заметок:**
+
+- **Язык:** Русский (английский только для терминов и кода)
+- **Формальность:** Формальный стиль, без фамильярности
+- **Структура:** Конкретика без вводных фраз ("Конечно!", "Отличный вопрос!")
+- **Детализация:** Адаптивная — кратко для простых вопросов, подробно для сложных
+- **Форматирование:** Активное использование Markdown (заголовки, списки, таблицы, код-блоки)
+
+### 5.2. Паттерны формулировок
+
+**Характерные обороты (из заметок):**
+- "Нужно разобраться с..."
+- "Критически важно..."
+- "Проблема в том, что..."
+- "Алгоритм следующий:"
+- Preference к техническим терминам без упрощений
+
+### 5.3. Типичные запросы (топ-10 тем)
+
+1. Глубокие объяснения технических концептов
+2. Архитектурные best practices
+3. Разбор сложных тем (многопоточность, async)
+4. Помощь в структурировании знаний
+5. Code review и оптимизация
+6. Подготовка к техническим собеседованиям
+7. Self-hosted решения и конфигурации
+8. Промпт-инжиниринг для AI
+9. Организация заметок и PKM
+10. Творческая помощь (поэзия, идеи для видео)
+
+---
+
+## 6. Текущий контекст
+
+### 6.1. Активные проекты (на основе недавних заметок)
+
+**Профессиональные:**
+1. **Изучение многопоточности в C#** (12 заметок за апрель)
+   - Фокус: async/await, Task, CancellationToken
+   - Цель: Подготовка к собеседованиям + применение в проекте
+
+2. **Настройка homelab** (5 заметок за апрель)
+   - Docker Compose, n8n, self-hosted сервисы
+   - Статус: В процессе развертывания
+
+3. **Подготовка к собеседованиям** (7 заметок)
+   - Систематизация знаний
+   - Создание мок-интервью материалов
+
+**Личные:**
+1. **Настройка Obsidian и notes management** (текущая задача)
+   - Создание skill для автоматизации
+
+2. **Планирование YouTube канала** (3 заметки)
+   - Сбор идей для видео
+   - Технический контент
+
+### 6.2. Текущие вызовы
+
+**Извлечено из недавних #личное/рефлексия:**
+
+1. **Balance обучения и применения**
+   - "Слишком много туториалов, мало практики"
+   - Осознание проблемы, поиск решений
+
+2. **Систематизация растущей базы знаний**
+   - Inbox overload в Obsidian
+   - Создание автоматизации как решение
+
+3. **Impostor syndrome при подготовке к собеседованиям**
+   - Сравнение с senior developers
+   - Работа над уверенностью
+
+### 6.3. Недавние достижения
+
+**Из #карьера/достижения за последний месяц:**
+
+1. Разобрался с ConfigureAwait и async best practices
+2. Развернул working homelab с 5 сервисами
+3. Создал структурированную систему тегов для Obsidian
+4. Написал 3 стихотворения (личное достижение)
+
+---
+
+## 7. Знания и экспертиза
+
+### 7.1. Карта знаний (Knowledge Map)
+
+**Статистика графа:**
+- Всего заметок: 147
+- Всего связей: 213
+- Средняя связность: 1.45 связей на заметку
+
+**Hub-заметки (наибольшее количество связей):**
+1. "C# Advanced Topics" (23 backlinks)
+2. "Архитектура ПО — основы" (17 backlinks)
+3. "Docker Compose для homelab" (12 backlinks)
+4. "Подготовка к собеседованиям — план" (11 backlinks)
+5. "SOLID Principles" (9 backlinks)
+
+**Кластеры знаний:**
+
+**Кластер 1: Backend Development (52 заметки)**
+- Центральные темы: C#, .NET, архитектура
+- Плотность связей: высокая (avg 2.1 связей/заметка)
+
+**Кластер 2: Infrastructure (18 заметок)**
+- Центральные темы: Docker, Linux, homelab
+- Плотность: средняя (avg 1.4 связей/заметка)
+
+**Кластер 3: Career & Interview Prep (15 заметок)**
+- Центральные темы: собеседования, резюме, достижения
+- Плотность: средняя (avg 1.2 связей/заметка)
+
+**Кластер 4: AI & Automation (10 заметок)**
+- Центральные темы: промпты, Claude, n8n
+- Плотность: низкая (avg 0.8 связей/заметка) — новая область
+
+**Кластер 5: Personal & Creative (12 заметок)**
+- Центральные темы: дневники, поэзия, рефлексия
+- Плотность: низкая (avg 0.6 связей/заметка) — изолированная область
+
+**Островки (заметки без связей):** 23 заметки
+- Преимущественно в #входящие
+
+### 7.2. Глубина знаний по областям
+
+**Глубокое понимание (deep dive, 10+ связанных заметок):**
+- C# и .NET экосистема
+- Архитектурные паттерны
+- Async/await и многопоточность
+
+**Рабочее знание (5-9 связанных заметок):**
+- Docker и контейнеризация
+- Linux системное администрирование
+- Подготовка к собеседованиям
+
+**Поверхностное знакомство (1-4 заметки):**
+- AI и промпт-инжиниринг
+- n8n автоматизация
+- Создание видеоконтента
+
+### 7.3. White Spots (области "нужно изучить")
+
+**Явно упомянутые в заметках:**
+1. Kubernetes / оркестрация (упомянуто 2 раза как TODO)
+2. Микросервисы архитектура (поверхностное знакомство)
+3. gRPC и современные протоколы
+4. Cloud platforms (AWS/Azure) — фокус на self-hosted, но awareness of cloud нужна
+
+---
+
+## 8. Метаданные для AI
+
+### 8.1. Как работать с этим профилем
+
+**Стиль общения:**
+- Обращаться формально, на "вы"
+- Давать структурированные ответы (заголовки, списки)
+- Избегать вводных фраз и "воды"
+- Не смягчать критику — прямота ценится
+
+**Глубина ответов:**
+- Технические вопросы: детальные объяснения с примерами кода
+- Концептуальные: системный подход, связи с другими концептами
+- Личные: эмпатия + практичность
+
+**Форматирование:**
+- Активно использовать Markdown
+- Code blocks с подсветкой синтаксиса
+- Таблицы для сравнений
+- Диаграммы (Mermaid) для архитектурных концептов
+
+### 8.2. Триггеры для проактивности
+
+**Когда Claude должен быть проактивен:**
+
+1. **Архитектурные риски**
+   - "Такой подход может привести к tight coupling..."
+   - "Альтернатива: рассмотрите применение X паттерна"
+
+2. **Потенциальные ошибки в коде**
+   - Особенно threading issues, async pitfalls
+   - "Здесь возможен race condition, рассмотрите использование lock"
+
+3. **Более эффективные альтернативы**
+   - Не просто решить задачу, но предложить лучший подход
+   - "Это работает, но вот более идиоматичный .NET способ..."
+
+4. **Связи с существующими знаниями**
+   - "Это связано с SOLID принципами, которые вы изучали"
+   - Помогать строить ментальные модели
+
+### 8.3. Запрещённые темы
+
+Нет явных запретов в заметках. Все темы открыты для обсуждения.
+
+### 8.4. Контекст взаимодействия
+
+**Предпочитаемые инструменты:**
+- Claude Code (для разработки)
+- Claude Chat (для дискуссий и планирования)
+- Obsidian (для фиксации знаний)
+
+**Workflow integration:**
+- Заметки из диалогов часто переносятся в Obsidian
+- Ценит возможность "запомнить это" для будущих сессий
+
+---
+
+## 9. История изменений
+
+### v1.0 (2026-04-20)
+
+**Создан начальный профиль**
+- Проанализировано: 147 заметок
+- Источники: все категории кроме #входящие и #архив
+- Глубина анализа: deep (semantic analysis, graph building, sentiment)
+- Время генерации: 12 минут
+
+**Основные выводы:**
+- Чётко выраженный системно-аналитический когнитивный стиль
+- Высокая экспертиза в C#/.NET, растущий интерес к инфраструктуре
+- Активная фаза обучения и подготовки к карьерному росту
+- Присутствие творческой стороны (поэзия) как баланс к техническому фокусу
+
+**Рекомендации для следующего обновления:**
+- Отследить прогресс в многопоточности (текущий фокус)
+- Мониторинг баланса между обучением и применением
+- Проверить развитие YouTube проекта
+
+---
+
+**Конец профиля**
+
+---
+
+*Этот профиль — живой документ. Обновляется автоматически раз в месяц или при достижении 50 новых заметок.*
+
+*Для ручного обновления: `notes-manager generate-profile --update`*
+```
+
+---
+
+## Error Handling & Edge Cases
+
+### Общие правила обработки ошибок
+
+```python
+class NotesManagerError(Exception):
+    """Base exception для всех ошибок skill"""
+    pass
+
+class VaultNotFoundError(NotesManagerError):
+    """Vault path не найден или недоступен"""
+    pass
+
+class ConfigurationError(NotesManagerError):
+    """Ошибка конфигурации"""
+    pass
+
+class NoteParsingError(NotesManagerError):
+    """Ошибка парсинга заметки"""
+    pass
+
+# Обработка в каждой команде:
+try:
+    vault = VaultManager(config)
+except VaultNotFoundError:
+    print("❌ Vault не найден. Укажите путь:")
+    path = input("> ")
+    config.set_vault_path(path)
+    vault = VaultManager(config)
+```
+
+### Edge Cases
+
+**1. Пустой vault:**
+```python
+if len(vault.get_all_notes()) == 0:
+    print("⚠️ Vault пуст. Создайте заметки перед использованием skill.")
+    sys.exit(0)
+```
+
+**2. Отсутствие TAGS_HIERARCHICAL.md:**
+```python
+if not vault.tags_file.exists():
+    print("⚠️ Файл тегов не найден: 99_Служебная/Indexes/TAGS_HIERARCHICAL.md")
+    print("💡 Создать файл с базовой структурой? [Y/n]")
+    if input().lower() in ['y', '']:
+        create_default_tags_file(vault)
+```
+
+**3. Превышение context limits:**
+```python
+def load_notes_with_limit(notes, max_notes=25, context_threshold=0.55):
+    loaded = []
+    current_tokens = 0
+    max_tokens = 200000 * context_threshold
+    
+    for note in notes:
+        note_tokens = estimate_tokens(note.content)
+        
+        if current_tokens + note_tokens > max_tokens or len(loaded) >= max_notes:
+            print(f"⚠️ Достигнут лимит контекста ({len(loaded)} заметок, {current_tokens} tokens)")
+            print(f"💡 Сокращаю scope для оставшихся {len(notes) - len(loaded)} заметок")
+            
+            # Создать summaries для остальных
+            for remaining in notes[len(loaded):]:
+                summary = create_summary(remaining)
+                loaded.append(summary)
+                if len(loaded) >= max_notes:
+                    break
+            break
+        
+        loaded.append(note)
+        current_tokens += note_tokens
+    
+    return loaded
+```
+
+**4. Битый frontmatter:**
+```python
+def parse_frontmatter(content):
+    try:
+        return yaml.safe_load(content)
+    except yaml.YAMLError as e:
+        print(f"⚠️ Ошибка парсинга frontmatter: {e}")
+        print("💡 Попытка автоисправления...")
+        
+        # Попытка fix common issues
+        fixed = fix_common_yaml_errors(content)
+        return yaml.safe_load(fixed)
+```
+
+---
+
+## Testing Criteria
+
+### Unit Tests
+
+**Для каждого компонента:**
+```python
+# test_tag_analyzer.py
+def test_analyze_tags_basic():
+    note = Note(content="Async await in C#", tags=['#it/csharp'])
+    recommendations = analyze_tags(note, tags_hierarchy)
+    
+    assert '#it/многопоточность' in [r.tag for r in recommendations.add]
+    assert len(recommendations.remove) == 0
+
+def test_analyze_tags_remove_irrelevant():
+    note = Note(content="Docker setup", tags=['#личное/дневник'])
+    recommendations = analyze_tags(note, tags_hierarchy)
+    
+    assert '#личное/дневник' in [r.tag for r in recommendations.remove]
+```
+
+### Integration Tests
+
+**End-to-end тесты для команд:**
+```python
+def test_audit_command_full_workflow(test_vault):
+    result = run_command('audit', test_vault.path)
+    
+    assert result.format_issues > 0
+    assert result.placement_issues >= 0
+    assert 'auto_fixable' in result.summary
+```
+
+### Валидация результатов
+
+**Для команды generate-profile:**
+```python
+def validate_profile(profile_path):
+    """
+    Проверяет корректность сгенерированного профиля
+    """
+    assert profile_path.exists()
+    
+    content = profile_path.read_text()
+    
+    # Проверка структуры
+    required_sections = [
+        '## 1. Базовая информация',
+        '## 2. Технические навыки',
+        '## 4. Психологический портрет',
+        '## 9. История изменений'
+    ]
+    
+    for section in required_sections:
+        assert section in content, f"Missing section: {section}"
+    
+    # Проверка frontmatter
+    assert content.startswith('---')
+    
+    # Проверка наличия данных
+    assert 'Упоминаний:' in content  # Technical skills
+    assert 'Топ-' in content  # Lists present
+```
+
+---
+
+## Performance Requirements
+
+### Benchmarks для MVP
+
+**Команда analyze-tags:**
+- Single note: < 2 секунд
+
+**Команда audit:**
+- 100 notes: < 30 секунд
+- 500 notes: < 2 минут
+
+**Команда search:**
+- Search query: < 5 секунд (для vault до 500 заметок)
+
+**Команда generate-profile (deep):**
+- 100-150 notes: < 15 минут
+- Shallow mode: < 5 минут
+
+---
+
+## Deployment Instructions
+
+### Installation
+
+```bash
+# 1. Клонирование skill в user skills directory
+cd /mnt/skills/user/
+git clone <notes-manager-repo>
+
+# 2. Установка зависимостей
+cd notes-manager
+pip install -e . --break-system-packages
+
+# 3. Инициализация конфигурации
+notes-manager init
+# Запрос пути к vault, создание config.yaml
+
+# 4. Валидация установки
+notes-manager --version
+notes-manager --help
+```
+
+### Первый запуск
+
+```bash
+# Генерация базового профиля
+notes-manager generate-profile
+
+# Audit vault для выявления первоначальных проблем
+notes-manager audit /path/to/vault --all
+
+# Тест поиска
+notes-manager search "C# async"
+```
+
+---
+
+## Appendix: Псевдокод ключевых алгоритмов
+
+### A. Keyword Extraction
+```python
+def extract_keywords(text, top_n=10):
+    """
+    TF-IDF based keyword extraction
+    """
+    # Tokenization
+    tokens = word_tokenize(text.lower())
+    
+    # Remove stopwords
+    stopwords = load_stopwords('ru') + load_stopwords('en')
+    filtered = [t for t in tokens if t not in stopwords]
+    
+    # Calculate TF-IDF
+    tf = Counter(filtered)
+    idf = calculate_idf(filtered, corpus=all_vault_notes)
+    
+    tfidf_scores = {word: tf[word] * idf[word] for word in tf}
+    
+    # Return top N
+    return sorted(tfidf_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+```
+
+### B. Jaccard Similarity
+```python
+def calculate_jaccard_similarity(text1, text2):
+    """
+    Jaccard similarity coefficient
+    """
+    set1 = set(word_tokenize(text1.lower()))
+    set2 = set(word_tokenize(text2.lower()))
+    
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
+    
+    return intersection / union if union > 0 else 0
+```
+
+### C. Graph Traversal для поиска связей
+```python
+def find_related_notes(start_note, vault, max_depth=3):
+    """
+    BFS для поиска связанных заметок
+    """
+    visited = set()
+    queue = [(start_note, 0)]  # (note, depth)
+    related = []
+    
+    while queue:
+        current, depth = queue.pop(0)
+        
+        if current in visited or depth > max_depth:
+            continue
+        
+        visited.add(current)
+        related.append((current, depth))
+        
+        # Get linked notes
+        links = vault.get_links(current)
+        backlinks = vault.get_backlinks(current)
+        
+        for link in links + backlinks:
+            if link not in visited:
+                queue.append((link, depth + 1))
+    
+    return related
+```
+
+---
+
+**КОНЕЦ СПЕЦИФИКАЦИИ**

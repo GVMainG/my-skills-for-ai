@@ -1,0 +1,65 @@
+vault:
+  path: ""
+  tags_file: "99_Служебная/Indexes/TAGS_HIERARCHICAL.md"
+
+folders:
+  inbox: "00-inbox"
+  daily: "10-daily"
+  areas: "20-areas"
+  projects: "30-projects"
+  archive: "40-archive"
+  service: "99_Служебная"
+  attachments: "_attachments"
+  templates: "_templates"
+
+limits:
+  max_notes_in_context: 25
+  context_usage_threshold: 0.55
+  search_max_results: 10
+
+search:
+  relevance_threshold: 0.2
+  enable_backlink_expansion: true
+  prioritization:
+    - "backlink_count"
+    - "tag_match"
+    - "modification_date"
+
+audit:
+  min_note_length: 100
+  check_untitled: true
+  check_no_frontmatter: true
+  default_untitled_names:
+    - "Untitled"
+    - "Без названия"
+    - "New note"
+
+profile:
+  output_file: "CLAUDE.md"
+  sources:
+    include_all: true
+    exclude_tags:
+      - "входящие/*"
+      - "архив/*"
+    exclude_folders:
+      - "99_Служебная"
+  analysis:
+    depth: "deep"
+    time_window_months: null
+    min_mentions_for_skill: 3
+    extract_quotes: true
+    show_contradictions: true
+  auto_update:
+    enabled: true
+    schedule: "monthly"
+    trigger_new_notes: 50
+  sections:
+    - basic_info
+    - technical_skills
+    - interests
+    - psychological_portrait
+    - communication_style
+    - current_context
+    - knowledge_map
+    - metadata
+    - changelog

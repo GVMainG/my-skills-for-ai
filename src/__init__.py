@@ -1,0 +1,1 @@
+# notes-manager skill package

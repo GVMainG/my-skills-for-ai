@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from src.core.config import load_config; print\\('config OK'\\)\")",
+      "Bash(where python3 *)",
+      "Bash(where py *)",
+      "Read(//usr/**)",
+      "Bash(python3 -c \"from src.core.config import load_config; print\\('config OK'\\)\")",
+      "Bash(/c/Users/GV/AppData/Local/Python/bin/python3 --version)",
+      "Bash(/c/Users/GV/AppData/Local/Python/bin/python3 -c ' *)"
+    ]
+  }
+}
