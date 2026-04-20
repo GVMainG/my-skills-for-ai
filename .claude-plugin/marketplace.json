@@ -1,13 +1,16 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "notes-manager",
+  "description": "Управление Obsidian vault: анализ тегов, audit заметок, поиск, дневник, генерация профиля.",
   "owner": {
     "name": "GV"
   },
   "plugins": [
     {
       "name": "notes-manager",
-      "source": ".",
-      "description": "Управление Obsidian vault: анализ тегов, audit заметок, поиск, дневник, генерация профиля."
+      "description": "Управление Obsidian vault: анализ тегов, audit заметок, поиск, дневник, генерация профиля.",
+      "source": "./",
+      "category": "productivity"
     }
   ]
 }
