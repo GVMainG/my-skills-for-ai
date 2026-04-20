@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "notes-manager",
-      "source": "..",
+      "source": ".",
       "description": "Управление Obsidian vault: анализ тегов, audit заметок, поиск, дневник, генерация профиля."
     }
   ]
