@@ -7,7 +7,10 @@
       "Read(//usr/**)",
       "Bash(python3 -c \"from src.core.config import load_config; print\\('config OK'\\)\")",
       "Bash(/c/Users/GV/AppData/Local/Python/bin/python3 --version)",
-      "Bash(/c/Users/GV/AppData/Local/Python/bin/python3 -c ' *)"
+      "Bash(/c/Users/GV/AppData/Local/Python/bin/python3 -c ' *)",
+      "Bash(pip show *)",
+      "Bash(python3 -c \"import site; print\\(site.USER_SCRIPTS\\)\")",
+      "Read(//c/Users/GV/AppData/Local/Python/pythoncore-3.14-64/Scripts/**)"
     ]
   }
 }
