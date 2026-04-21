@@ -15,7 +15,8 @@
       "Read(//c/Users/GV/.claude/plugins/**)",
       "Bash(git config *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git reset *)"
     ]
   }
 }
