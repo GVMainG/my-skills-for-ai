@@ -12,7 +12,10 @@
       "Bash(python3 -c \"import site; print\\(site.USER_SCRIPTS\\)\")",
       "Read(//c/Users/GV/AppData/Local/Python/pythoncore-3.14-64/Scripts/**)",
       "WebSearch",
-      "Read(//c/Users/GV/.claude/plugins/**)"
+      "Read(//c/Users/GV/.claude/plugins/**)",
+      "Bash(git config *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }
