@@ -77,6 +77,14 @@
 | GET | /api/{{resource}} | {{description}} | {{yes/no}} |
 | POST | /api/{{resource}} | {{description}} | {{yes/no}} |
 
+## 7.1 Ошибки и валидация (если применимо)
+
+{{validation rules, error formats, important error cases}}
+
+## 7.2 Миграции/изменения схемы (если применимо)
+
+{{migration approach, versioning, rollback considerations}}
+
 ## 8. Вне скоупа v1
 
 Следующие функции **не входят** в первую версию:

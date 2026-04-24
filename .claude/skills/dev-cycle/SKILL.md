@@ -1,20 +1,18 @@
 ---
 name: dev-cycle
 description: >
-  Full software development lifecycle skill — from idea to working application.
-  Invoke this skill whenever the user wants to create a new application, start a new project,
-  or develop software from scratch. Triggers on phrases like: "создать приложение", "разработать приложение",
-  "новый проект", "хочу сделать сайт/сервис/систему", "есть идея для приложения", "build app",
-  "create application", "new project", "start development", "develop from scratch", "I have an idea for an app".
-  This skill guides Claude through a structured pipeline:
-  idea & feasibility discussion → requirements gathering → ТЗ approval → task block planning → iterative development with per-block review → testing.
-  Always use this skill when there's a multi-phase development workflow ahead, even if the user doesn't explicitly
-  say "full cycle" or "dev cycle".
+  Triggered only by the explicit command "/dev-cycle".
 ---
 
 # Full Development Lifecycle
 
 This skill manages the complete development process of an application, with explicit user approval gates between each phase. **Never skip a gate or proceed to the next phase without explicit approval.**
+
+## Activation Rule
+
+Proceed only if the user explicitly typed `/dev-cycle`.
+
+If the user did not type `/dev-cycle`, do not start this workflow. Ask them to type `/dev-cycle` when they are ready.
 
 ## Supported Stack
 
@@ -22,30 +20,75 @@ This skill manages the complete development process of an application, with expl
 - **Frontend:** React
 - **Database:** SQL (PostgreSQL, MS SQL, SQLite — clarify during requirements)
 - **Infrastructure:** Docker, docker-compose
-- **Testing:** Unit tests (xUnit/NUnit for C# projects), manual for others
+- **Testing:** This skill does not implement automated tests. Instead, it provides test coverage recommendations (what modules/methods/scenarios to cover) and manual verification steps per block.
+
+---
+
+## Start: Choose Mode + Project Root
+
+Immediately after activation, ask:
+
+1. Mode: **new project** (start from scratch) or **existing project** (support/extend an existing codebase)?
+2. Project root folder: which directory should be treated as the project root for this workflow?
+
+Then follow the corresponding branch below.
 
 ---
 
 ## Project File Structure
 
-Create this structure in the current working directory:
+### New Project
+
+Create this structure in the selected working directory:
 
 ```
 <app-name>/
 ├── docs/
 │   ├── requirements.md       # Gathered requirements
 │   ├── technical-spec.md     # Agreed ТЗ
-│   └── tasks.md              # Task blocks (filled after ТЗ approval)
+│   ├── tasks.md              # Task blocks (filled after ТЗ approval)
+│   └── _dev-cycle/           # Skill state (resume support)
+│       ├── context.md
+│       ├── decisions.md
+│       └── open-questions.md
 └── src/                      # Source code (filled during development)
 ```
 
-Create the `docs/` folder and empty placeholder files at the start of Phase 1.
+Create `docs/` and `docs/_dev-cycle/` and empty placeholder files at the start of Phase 1.
+
+Templates (optional but recommended):
+
+- `references/requirements-template.md` → `docs/requirements.md`
+- `references/tz-template.md` → `docs/technical-spec.md`
+- `references/tasks-template.md` → `docs/tasks.md`
+- `references/dev-cycle-context-template.md` → `docs/_dev-cycle/context.md`
+- `references/dev-cycle-decisions-template.md` → `docs/_dev-cycle/decisions.md`
+- `references/dev-cycle-open-questions-template.md` → `docs/_dev-cycle/open-questions.md`
+
+### Existing Project
+
+Use the user-selected project root. Do not create a nested `<app-name>/` folder unless the user explicitly asks for it.
+
+If `docs/_dev-cycle/` exists:
+
+- Read `docs/_dev-cycle/context.md`, `docs/_dev-cycle/decisions.md`, `docs/_dev-cycle/open-questions.md`
+- Read `docs/requirements.md`, `docs/technical-spec.md`, `docs/tasks.md` (if they exist)
+- Summarize where the workflow likely stopped (which phase/block) and ask the user to confirm where to resume
+
+If `docs/_dev-cycle/` does not exist:
+
+- Create `docs/_dev-cycle/` and the placeholder files listed above
+- Create `docs/requirements.md`, `docs/technical-spec.md`, `docs/tasks.md` if missing
+- Ask the user what changes/fixes/features they want to implement in the existing project
+- Proceed to Phase 1 (requirements) but treat it as **change requirements for an existing system**
 
 ---
 
 ## Phase 0: Idea & Feasibility
 
 **Goal:** Understand the idea at a high level and honestly assess whether it's worth pursuing — before investing time in detailed requirements. This phase is a conversation, not a form.
+
+Applicable when the mode is **new project**. For **existing project**, skip Phase 0 and go to Phase 1 (requirements for changes) after the resume/initialization step above.
 
 ### Step 0.1 — Listen to the idea
 
@@ -107,7 +150,7 @@ Don't proceed to requirements until the user explicitly agrees to move forward.
 
 ## Phase 1: Requirements Gathering
 
-**Goal:** Fully understand what the user wants to build before writing anything.
+**Goal:** Capture requirements in files. For an existing project, requirements describe the change request and current constraints.
 
 ### Step 1.1 — Ask for the app name
 
@@ -145,6 +188,12 @@ Ask follow-up questions if any answer is unclear or ambiguous. Don't move on unt
 Write everything gathered to `docs/requirements.md` using the template in `references/requirements-template.md`.
 
 Tell the user: "Требования собраны и сохранены в `docs/requirements.md`. Перехожу к составлению ТЗ."
+
+Also maintain:
+
+- `docs/_dev-cycle/context.md` (mode, project root, current phase/block, date)
+- `docs/_dev-cycle/open-questions.md` (unresolved items)
+- `docs/_dev-cycle/decisions.md` (key decisions and why)
 
 ---
 
@@ -264,15 +313,15 @@ After completing all tasks in the block, present a summary:
 
 If the user finds issues — fix them, show what changed, ask again.
 
-### Step 4.4 — Testing (C# projects only)
+### Step 4.4 — Test Coverage Recommendations (no implementation)
 
-If the project is C#, after the user approves the block:
-- Write unit tests for the business logic implemented in this block
-- Aim for coverage of happy path + main edge cases
-- Use xUnit or NUnit (whichever was established in the project setup)
-- Run the tests and confirm they pass before moving on
+After the user approves the block, add a short section to `docs/tasks.md` (under the block) with recommendations:
 
-For non-C# projects, remind the user to test manually using the instructions from Step 4.3.
+- What to cover with automated tests (modules/methods/scenarios), prioritized: P0/P1/P2
+- Suggested test types: unit vs integration vs e2e (as applicable)
+- What is risky and why (edge cases, error handling, concurrency, migrations, permissions)
+
+Do not write tests as part of this workflow. Do not run a test runner unless the user explicitly asks.
 
 ### Step 4.5 — Repeat
 
@@ -287,6 +336,7 @@ When all blocks are done:
 1. Update `docs/tasks.md` — all tasks should be marked `[x]`
 2. Verify `docker-compose up` works (if Docker was in scope)
 3. Write a brief `README.md` in the project root with: what the app does, how to run it, and the tech stack
+4. Ensure `docs/_dev-cycle/context.md` reflects the final state (completed, or the next planned step)
 
 Present a final summary:
 
@@ -316,6 +366,7 @@ These rules apply at every gate in this workflow:
 ## Key Principles
 
 - **State lives in files.** Always keep `docs/requirements.md`, `docs/technical-spec.md`, and `docs/tasks.md` up to date. If the conversation is interrupted, you can pick it up from these files.
+- **Skill state lives in `docs/_dev-cycle/`.** Use it to resume the workflow on existing projects and to avoid losing decisions/open questions across chat interruptions.
 - **One phase at a time.** Don't mix phases. Requirements phase is only requirements. Don't start writing code ideas during ТЗ phase.
 - **Be specific when asking.** Vague requirements lead to rework. Push back gently if an answer is too vague ("Что именно должно происходить когда...?").
 - **Show, don't just tell.** When presenting the ТЗ or task plan, show the actual document, not a summary of it.
